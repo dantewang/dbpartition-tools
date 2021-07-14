@@ -17,6 +17,7 @@ import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,53 +40,50 @@ public class MigrateToDBPartition {
 		}
 
 		_defaultSchemaName = args[0];
+		_dbUsername = args[1];
+		_dbPassword = args[2];
 
 		Class.forName(JDBC_DRIVER).newInstance();
 
-		try {
-			_connection = DriverManager.getConnection(
-				JDBC_URL1 + _defaultSchemaName + JDBC_URL2, args[1], args[2]);
+		List<Long> companyIds = _getNonDefaultCompanyIds();
 
-			List<Long> companyIds = _getNonDefaultCompanyIds();
+		for (Long companyId : companyIds) {
+			System.out.println("** Migrating company with id " + companyId);
 
-			for (Long companyId : companyIds) {
-				System.out.println("** Migrating company with id " + companyId);
-
-				_createSchema(companyId);
+			try (Connection connection = _getConnection()) {
+				_createSchema(connection, companyId);
 			}
-		}
-		finally {
-			if (_connection != null) {
-				_connection.close();
+			catch (Exception exception) {
+				exception.printStackTrace();
 			}
 		}
 
 		System.out.println("*** End migrating companies to DB Partition ***");
 	}
 
-	private static void _createSchema(long companyId)
+	private static void _createSchema(Connection connection, long companyId)
 		throws Exception {
 
-		try (PreparedStatement preparedStatement = _connection.prepareStatement(
-			"create schema " + _getSchemaName(companyId) +
-				" character set utf8")) {
+		try (PreparedStatement preparedStatement = connection.prepareStatement(
+				"create schema " + _getSchemaName(companyId) +
+					" character set utf8")) {
 
 			preparedStatement.executeUpdate();
 
 			System.out.println(
 				"Schema " + _getSchemaName(companyId) + " created");
 
-			DatabaseMetaData databaseMetaData = _connection.getMetaData();
+			DatabaseMetaData databaseMetaData = connection.getMetaData();
 
 			try (ResultSet resultSet = databaseMetaData.getTables(
-				_connection.getCatalog(), _connection.getSchema(), null,
-				new String[]{"TABLE"});
-				 Statement statement = _connection.createStatement()) {
+					connection.getCatalog(), connection.getSchema(), null,
+					new String[]{"TABLE"});
+				 Statement statement = connection.createStatement()) {
 
 				while (resultSet.next()) {
 					String tableName = resultSet.getString("TABLE_NAME");
 
-					if (_isControlTable(tableName)) {
+					if (_isControlTable(connection, tableName)) {
 						statement.executeUpdate(
 							_getCreateView(companyId, tableName));
 					}
@@ -103,7 +101,7 @@ public class MigrateToDBPartition {
 	}
 
 	private static void _moveCompanyData(
-		long companyId, String tableName, Statement statement)
+			long companyId, String tableName, Statement statement)
 		throws Exception {
 
 		String whereClause = " where companyId = " + companyId;
@@ -121,11 +119,12 @@ public class MigrateToDBPartition {
 	}
 
 
-	private static boolean _isControlTable(String tableName) throws Exception {
+	private static boolean _isControlTable(
+		Connection connection, String tableName) throws Exception {
 
 		if (_controlTableNames.contains(tableName) ||
 			tableName.startsWith("QUARTZ_") ||
-			!_hasColumn(tableName, "companyId")) {
+			!_hasColumn(connection, tableName, "companyId")) {
 
 			return true;
 		}
@@ -133,13 +132,14 @@ public class MigrateToDBPartition {
 		return false;
 	}
 
-	private static boolean _hasColumn(String tableName, String columnName)
+	private static boolean _hasColumn(
+			Connection connection, String tableName, String columnName)
 		throws Exception {
 
-		DatabaseMetaData databaseMetaData = _connection.getMetaData();
+		DatabaseMetaData databaseMetaData = connection.getMetaData();
 
 		try (ResultSet rs = databaseMetaData.getColumns(
-			_connection.getCatalog(), _connection.getSchema(), tableName,
+			connection.getCatalog(), connection.getSchema(), tableName,
 			columnName)) {
 
 			if (!rs.next()) {
@@ -167,11 +167,11 @@ public class MigrateToDBPartition {
 	}
 
 	private static List<Long> _getNonDefaultCompanyIds() throws Exception {
-		try (Statement statement = _connection.createStatement();
+		try (Connection connection = _getConnection();
+			 Statement statement = connection.createStatement();
 			 ResultSet resultSet = statement.executeQuery(
 			 	"select companyId from Company where companyId >" +
-					"(select min(companyId) from Company)")
-			) {
+					"(select min(companyId) from Company)")) {
 
 			List<Long> companyIds = new ArrayList<>();
 
@@ -183,9 +183,15 @@ public class MigrateToDBPartition {
 		}
 	}
 
-	private static Connection _connection;
+	private static Connection _getConnection() throws SQLException {
+		return DriverManager.getConnection(
+			JDBC_URL1 + _defaultSchemaName + JDBC_URL2, _dbUsername,
+			_dbPassword);
+	}
 
 	private static String _defaultSchemaName;
+	private static String _dbUsername;
+	private static String _dbPassword;
 
 	private static final Set<String> _controlTableNames = new HashSet<>(
 		Arrays.asList("Company", "VirtualHost"));
