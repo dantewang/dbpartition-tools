@@ -42,23 +42,35 @@ public class MigrateToDBPartition {
 
 		Class.forName(JDBC_DRIVER).newInstance();
 
+		List<Long> companyIds = null;
+
 		try {
 			_connection = DriverManager.getConnection(
 				JDBC_URL1 + _defaultSchemaName + JDBC_URL2, args[1], args[2]);
 
-			List<Long> companyIds = _getNonDefaultCompanyIds();
-
-			for (Long companyId : companyIds) {
-				System.out.println("** Migrating company with id " + companyId);
-
-				_createSchema(companyId);
-			}
+			companyIds = _getNonDefaultCompanyIds();
 		}
 		finally {
 			if (_connection != null) {
 				_connection.close();
 			}
 		}
+
+		for (Long companyId : companyIds) {
+				System.out.println("** Migrating company with id " + companyId);
+
+				try {
+					_connection = DriverManager.getConnection(
+						JDBC_URL1 + _defaultSchemaName + JDBC_URL2, args[1], args[2]);
+
+					_createSchema(companyId);
+				}
+				finally {
+					if (_connection != null) {
+						_connection.close();
+					}
+				}
+			}
 
 		System.out.println("*** End migrating companies to DB Partition ***");
 	}
